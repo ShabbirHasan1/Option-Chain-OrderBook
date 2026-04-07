@@ -24,6 +24,8 @@
 
 use crate::error::Error;
 use crate::orderbook::book::TerminalOrderSummary;
+use crate::orderbook::instrument_registry::InstrumentRegistry;
+use crate::orderbook::symbol_index::SymbolIndex;
 use crate::orderbook::underlying::UnderlyingOrderBook;
 use crate::utils::nanos_since_epoch;
 use optionstratlib::ExpirationDate;
@@ -425,7 +427,7 @@ impl Default for OptionChainSequencer {
 /// internal sequencer, assigning monotonic sequence numbers and optionally
 /// persisting events to a journal for replay.
 ///
-/// # Example
+/// # Example — basic usage
 ///
 /// ```rust,ignore
 /// use option_chain_orderbook::orderbook::SequencedUnderlyingOrderBook;
@@ -442,6 +444,41 @@ impl Default for OptionChainSequencer {
 /// )?;
 ///
 /// println!("Sequence: {}", receipt.sequence_num);
+/// ```
+///
+/// # Example — listing instruments via registry
+///
+/// ```rust,ignore
+/// use std::sync::Arc;
+/// use option_chain_orderbook::orderbook::{
+///     InstrumentRegistry, SequencedUnderlyingOrderBook, SymbolIndex,
+/// };
+/// use orderbook_rs::{OrderId, Side};
+///
+/// // 1. Create shared registry & symbol index
+/// let registry = Arc::new(InstrumentRegistry::new());
+/// let symbol_index = Arc::new(SymbolIndex::new());
+///
+/// // 2. Build the sequenced book with registry + index
+/// let book = SequencedUnderlyingOrderBook::new_with_registry_and_index(
+///     "BTC",
+///     Arc::clone(&registry),
+///     Arc::clone(&symbol_index),
+/// );
+///
+/// // 3. Submit an order — the hierarchy auto-registers the instrument
+/// let _receipt = book.submit_add_order(
+///     "BTC-20240329-50000-C",
+///     OrderId::new(),
+///     Side::Buy,
+///     100,
+///     10,
+/// )?;
+///
+/// // 4. Enumerate instruments
+/// for (id, info) in registry.iter() {
+///     println!("id={id}, symbol={}", info.symbol());
+/// }
 /// ```
 pub struct SequencedUnderlyingOrderBook {
     /// The underlying order book hierarchy.
@@ -476,6 +513,62 @@ impl SequencedUnderlyingOrderBook {
         }
     }
 
+    /// Creates a new sequenced underlying order book with an instrument
+    /// registry and symbol index, without journaling.
+    ///
+    /// The registry and index are propagated through the
+    /// [`UnderlyingOrderBook`] hierarchy so that every strike created by
+    /// subsequent commands is automatically registered.
+    ///
+    /// # Arguments
+    ///
+    /// * `underlying` - The underlying asset symbol (e.g., "BTC")
+    /// * `registry` - Shared instrument registry for ID allocation
+    /// * `symbol_index` - Shared symbol index for O(1) lookups
+    #[must_use]
+    pub fn new_with_registry_and_index(
+        underlying: impl Into<String>,
+        registry: Arc<InstrumentRegistry>,
+        symbol_index: Arc<SymbolIndex>,
+    ) -> Self {
+        Self {
+            inner: UnderlyingOrderBook::new_with_registry_and_index(
+                underlying,
+                registry,
+                symbol_index,
+            ),
+            sequencer: OptionChainSequencer::new(),
+            journal: None,
+        }
+    }
+
+    /// Creates a new sequenced underlying order book with journal,
+    /// instrument registry, and symbol index.
+    ///
+    /// # Arguments
+    ///
+    /// * `underlying` - The underlying asset symbol
+    /// * `journal` - Journal for event persistence and replay
+    /// * `registry` - Shared instrument registry for ID allocation
+    /// * `symbol_index` - Shared symbol index for O(1) lookups
+    #[must_use]
+    pub fn with_journal_registry_and_index(
+        underlying: impl Into<String>,
+        journal: Arc<dyn OptionChainJournal>,
+        registry: Arc<InstrumentRegistry>,
+        symbol_index: Arc<SymbolIndex>,
+    ) -> Self {
+        Self {
+            inner: UnderlyingOrderBook::new_with_registry_and_index(
+                underlying,
+                registry,
+                symbol_index,
+            ),
+            sequencer: OptionChainSequencer::new(),
+            journal: Some(journal),
+        }
+    }
+
     /// Creates a sequenced wrapper around an existing underlying order book.
     #[must_use]
     pub fn from_underlying(underlying: UnderlyingOrderBook) -> Self {
@@ -504,6 +597,22 @@ impl SequencedUnderlyingOrderBook {
     #[inline]
     pub fn underlying(&self) -> &UnderlyingOrderBook {
         &self.inner
+    }
+
+    /// Returns a reference to the instrument registry, if one was provided
+    /// at construction time.
+    #[must_use]
+    #[inline]
+    pub fn registry(&self) -> Option<&Arc<InstrumentRegistry>> {
+        self.inner.registry()
+    }
+
+    /// Returns a reference to the symbol index, if one was provided
+    /// at construction time.
+    #[must_use]
+    #[inline]
+    pub fn symbol_index(&self) -> Option<&Arc<SymbolIndex>> {
+        self.inner.symbol_index()
     }
 
     /// Returns the current sequence number.
@@ -1901,5 +2010,114 @@ mod tests {
             .submit_add_order("BTC-20240329-50000-P", OrderId::new(), Side::Buy, 40, 5)
             .expect("submit");
         assert!(receipt.result.is_success());
+    }
+
+    // ── Registry / SymbolIndex integration ──────────────────────────────
+
+    #[test]
+    fn test_sequenced_book_new_without_registry() {
+        let book = SequencedUnderlyingOrderBook::new("BTC");
+        assert!(book.registry().is_none());
+        assert!(book.symbol_index().is_none());
+    }
+
+    #[test]
+    fn test_sequenced_book_new_with_registry_and_index() {
+        let registry = Arc::new(InstrumentRegistry::new());
+        let symbol_index = Arc::new(SymbolIndex::new());
+
+        let book = SequencedUnderlyingOrderBook::new_with_registry_and_index(
+            "BTC",
+            Arc::clone(&registry),
+            Arc::clone(&symbol_index),
+        );
+
+        assert!(book.registry().is_some());
+        assert!(book.symbol_index().is_some());
+        assert_eq!(book.underlying_symbol(), "BTC");
+        assert_eq!(book.current_sequence(), 0);
+        assert!(!book.has_journal());
+    }
+
+    #[test]
+    fn test_sequenced_book_with_journal_registry_and_index() {
+        let registry = Arc::new(InstrumentRegistry::new());
+        let symbol_index = Arc::new(SymbolIndex::new());
+        let journal: Arc<dyn OptionChainJournal> = Arc::new(InMemoryOptionChainJournal::new());
+
+        let book = SequencedUnderlyingOrderBook::with_journal_registry_and_index(
+            "BTC",
+            journal,
+            Arc::clone(&registry),
+            Arc::clone(&symbol_index),
+        );
+
+        assert!(book.registry().is_some());
+        assert!(book.symbol_index().is_some());
+        assert!(book.has_journal());
+    }
+
+    #[test]
+    fn test_sequenced_book_registry_populated_after_add_order() {
+        use chrono::{NaiveDate, TimeZone, Utc};
+
+        let registry = Arc::new(InstrumentRegistry::new());
+        let symbol_index = Arc::new(SymbolIndex::new());
+
+        let underlying = UnderlyingOrderBook::new_with_registry_and_index(
+            "BTC",
+            Arc::clone(&registry),
+            Arc::clone(&symbol_index),
+        );
+
+        assert!(registry.is_empty());
+        assert!(symbol_index.is_empty());
+
+        // Create the hierarchy — this registers instruments in the registry
+        let date = NaiveDate::from_ymd_opt(2024, 3, 29).expect("valid date");
+        let dt = date.and_hms_opt(0, 0, 0).expect("valid time");
+        let expiry = ExpirationDate::DateTime(Utc.from_utc_datetime(&dt));
+
+        let exp_book = underlying.get_or_create_expiration(expiry);
+        let strike = exp_book.get_or_create_strike(50000);
+        drop(strike);
+        drop(exp_book);
+
+        // Registry and symbol index should be populated after hierarchy creation
+        assert!(!registry.is_empty());
+        assert!(!symbol_index.is_empty());
+        assert!(symbol_index.contains("BTC-20240329-50000-C"));
+
+        // Wrap in sequencer and submit an order
+        let book = SequencedUnderlyingOrderBook::from_underlying(underlying);
+        let receipt = book
+            .submit_add_order("BTC-20240329-50000-C", OrderId::new(), Side::Buy, 100, 10)
+            .expect("submit");
+        assert!(receipt.result.is_success());
+
+        // Verify iter() returns the registered entries
+        let entries = registry.iter();
+        assert!(!entries.is_empty());
+
+        // Verify entries() on symbol index
+        let sym_entries = symbol_index.entries();
+        assert!(!sym_entries.is_empty());
+    }
+
+    #[test]
+    fn test_sequenced_book_from_underlying_with_registry() {
+        let registry = Arc::new(InstrumentRegistry::new());
+        let symbol_index = Arc::new(SymbolIndex::new());
+
+        let underlying = UnderlyingOrderBook::new_with_registry_and_index(
+            "ETH",
+            Arc::clone(&registry),
+            Arc::clone(&symbol_index),
+        );
+
+        let book = SequencedUnderlyingOrderBook::from_underlying(underlying);
+
+        assert!(book.registry().is_some());
+        assert!(book.symbol_index().is_some());
     }
 }

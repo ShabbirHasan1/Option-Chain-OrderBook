@@ -208,6 +208,40 @@ impl InstrumentRegistry {
     pub fn current_id(&self) -> u32 {
         self.next_id.load(Ordering::Relaxed)
     }
+
+    /// Returns a snapshot of all registered `(id, InstrumentInfo)` pairs.
+    ///
+    /// The returned `Vec` is a point-in-time snapshot — concurrent
+    /// registrations that occur after the call begins may or may not
+    /// be included. The order of entries is arbitrary.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use option_chain_orderbook::orderbook::{InstrumentInfo, InstrumentRegistry};
+    /// use optionstratlib::{ExpirationDate, OptionStyle};
+    /// use optionstratlib::prelude::pos_or_panic;
+    ///
+    /// let registry = InstrumentRegistry::new();
+    /// let id = registry.allocate();
+    /// registry.register(id, InstrumentInfo::new(
+    ///     "BTC-20240329-50000-C",
+    ///     ExpirationDate::Days(pos_or_panic!(30.0)),
+    ///     50000,
+    ///     OptionStyle::Call,
+    /// ));
+    ///
+    /// let entries = registry.iter();
+    /// assert_eq!(entries.len(), 1);
+    /// assert_eq!(entries[0].0, id);
+    /// ```
+    #[must_use]
+    pub fn iter(&self) -> Vec<(u32, InstrumentInfo)> {
+        self.index
+            .iter()
+            .map(|entry| (*entry.key(), entry.value().clone()))
+            .collect()
+    }
 }
 
 impl Default for InstrumentRegistry {
@@ -423,5 +457,44 @@ mod tests {
         let registry = InstrumentRegistry::new_with_seed(0);
         assert_eq!(registry.current_id(), 1);
         assert_eq!(registry.allocate(), 1);
+    }
+
+    #[test]
+    fn test_iter_empty() {
+        let registry = InstrumentRegistry::new();
+        let entries = registry.iter();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_iter_returns_all_entries() {
+        let registry = InstrumentRegistry::new();
+
+        for i in 0..5 {
+            let id = registry.allocate();
+            registry.register(
+                id,
+                InstrumentInfo::new(
+                    format!("BTC-20240329-{}-C", 50000 + i * 1000),
+                    test_expiration(),
+                    50000 + i * 1000,
+                    OptionStyle::Call,
+                ),
+            );
+        }
+
+        let entries = registry.iter();
+        assert_eq!(entries.len(), 5);
+
+        // Verify all IDs are present (order is arbitrary)
+        let mut ids: Vec<u32> = entries.iter().map(|(id, _)| *id).collect();
+        ids.sort();
+        assert_eq!(ids, vec![1, 2, 3, 4, 5]);
+
+        // Verify info is correct for one entry
+        let entry = entries.iter().find(|(id, _)| *id == 1);
+        assert!(entry.is_some());
+        let (_, info) = entry.expect("entry should exist");
+        assert_eq!(info.strike(), 50000);
     }
 }
