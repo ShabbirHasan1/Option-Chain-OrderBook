@@ -206,6 +206,40 @@ impl SymbolIndex {
     pub fn symbols(&self) -> Vec<String> {
         self.index.iter().map(|entry| entry.key().clone()).collect()
     }
+
+    /// Returns a snapshot of all registered `(symbol, SymbolRef)` pairs.
+    ///
+    /// The returned `Vec` is a point-in-time snapshot — concurrent
+    /// registrations that occur after the call begins may or may not
+    /// be included. The order of entries is arbitrary.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use option_chain_orderbook::orderbook::symbol_index::{SymbolIndex, SymbolRef};
+    /// use optionstratlib::{ExpirationDate, OptionStyle};
+    /// use optionstratlib::prelude::pos_or_panic;
+    ///
+    /// let index = SymbolIndex::new();
+    /// let sym_ref = SymbolRef::new(
+    ///     "BTC",
+    ///     ExpirationDate::Days(pos_or_panic!(30.0)),
+    ///     50000,
+    ///     OptionStyle::Call,
+    /// );
+    /// index.register("BTC-20260130-50000-C", sym_ref);
+    ///
+    /// let entries = index.entries();
+    /// assert_eq!(entries.len(), 1);
+    /// assert_eq!(entries[0].0, "BTC-20260130-50000-C");
+    /// ```
+    #[must_use]
+    pub fn entries(&self) -> Vec<(String, SymbolRef)> {
+        self.index
+            .iter()
+            .map(|entry| (entry.key().clone(), entry.value().clone()))
+            .collect()
+    }
 }
 
 impl Default for SymbolIndex {
@@ -354,5 +388,40 @@ mod tests {
         assert_eq!(symbols.len(), 2);
         assert!(symbols.contains(&"BTC-20260130-50000-C".to_string()));
         assert!(symbols.contains(&"BTC-20260130-50000-P".to_string()));
+    }
+
+    #[test]
+    fn test_symbol_index_entries_empty() {
+        let index = SymbolIndex::new();
+        let entries = index.entries();
+        assert!(entries.is_empty());
+    }
+
+    #[test]
+    fn test_symbol_index_entries() {
+        let index = SymbolIndex::new();
+
+        let call_ref = SymbolRef::new("BTC", test_expiration(), 50000, OptionStyle::Call);
+        let put_ref = SymbolRef::new("BTC", test_expiration(), 50000, OptionStyle::Put);
+
+        index.register("BTC-20260130-50000-C", call_ref.clone());
+        index.register("BTC-20260130-50000-P", put_ref.clone());
+
+        let entries = index.entries();
+        assert_eq!(entries.len(), 2);
+
+        let call_entry = entries
+            .iter()
+            .find(|(sym, _)| sym == "BTC-20260130-50000-C");
+        assert!(call_entry.is_some());
+        let (_, sym_ref) = call_entry.expect("call entry should exist");
+        assert_eq!(sym_ref.option_style(), OptionStyle::Call);
+
+        let put_entry = entries
+            .iter()
+            .find(|(sym, _)| sym == "BTC-20260130-50000-P");
+        assert!(put_entry.is_some());
+        let (_, sym_ref) = put_entry.expect("put entry should exist");
+        assert_eq!(sym_ref.option_style(), OptionStyle::Put);
     }
 }

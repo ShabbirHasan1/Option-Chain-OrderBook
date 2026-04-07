@@ -224,10 +224,10 @@ pub use orderbook::{
     AggregatedGreeks, CleanupResult, CycleRule, ExpirationCallback, ExpiryCycleConfig,
     ExpiryLifecycleManager, ExpiryScheduler, ExpiryType, FlatVolSurface, GreeksAggregator,
     GreeksEngine, GreeksRecalcTrigger, GreeksUpdate, GreeksUpdateListener, IndexPriceFeed,
-    LifecycleConfig, LifecycleEvent, LifecycleListener, LifecycleResult, MarkPriceCalculator,
-    MarkPriceConfig, MarkPriceConfigBuilder, MockPriceFeed, Position, PriceUpdate,
-    PriceUpdateListener, RefreshResult, StaticPriceFeed, StrikeGenerator, StrikeRangeConfig,
-    StrikeRangeConfigBuilder, SubscriptionId, SymbolIndex, SymbolRef, VolSurface,
-    calculate_tte_years, wire_feed_to_calculator,
+    InstrumentInfo, InstrumentRegistry, LifecycleConfig, LifecycleEvent, LifecycleListener,
+    LifecycleResult, MarkPriceCalculator, MarkPriceConfig, MarkPriceConfigBuilder, MockPriceFeed,
+    Position, PriceUpdate, PriceUpdateListener, RefreshResult, StaticPriceFeed, StrikeGenerator,
+    StrikeRangeConfig, StrikeRangeConfigBuilder, SubscriptionId, SymbolIndex, SymbolRef,
+    VolSurface, calculate_tte_years, wire_feed_to_calculator,
 };
 pub use utils::{ParsedSymbol, SymbolParser};

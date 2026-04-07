@@ -47,8 +47,6 @@ pub struct UnderlyingOrderBook {
     /// Instrument registry propagated to expiration managers.
     registry: Option<Arc<InstrumentRegistry>>,
     /// Symbol index for O(1) lookup by symbol string.
-    /// Stored for future use in hierarchy traversal.
-    #[allow(dead_code)]
     symbol_index: Option<Arc<SymbolIndex>>,
     /// Strike range configurations per expiry type.
     strike_range_configs: SharedStrikeRangeConfigs,
@@ -193,8 +191,7 @@ impl UnderlyingOrderBook {
     /// * `underlying` - The underlying asset symbol
     /// * `registry` - The instrument registry for ID allocation
     #[must_use]
-    #[allow(dead_code)]
-    pub(crate) fn new_with_registry(
+    pub fn new_with_registry(
         underlying: impl Into<String>,
         registry: Arc<InstrumentRegistry>,
     ) -> Self {
@@ -224,7 +221,7 @@ impl UnderlyingOrderBook {
     /// * `registry` - The instrument registry for ID allocation
     /// * `symbol_index` - The symbol index for O(1) lookups
     #[must_use]
-    pub(crate) fn new_with_registry_and_index(
+    pub fn new_with_registry_and_index(
         underlying: impl Into<String>,
         registry: Arc<InstrumentRegistry>,
         symbol_index: Arc<SymbolIndex>,
@@ -262,6 +259,12 @@ impl UnderlyingOrderBook {
     #[must_use]
     pub fn registry(&self) -> Option<&Arc<InstrumentRegistry>> {
         self.registry.as_ref()
+    }
+
+    /// Returns a reference to the symbol index, if any.
+    #[must_use]
+    pub fn symbol_index(&self) -> Option<&Arc<SymbolIndex>> {
+        self.symbol_index.as_ref()
     }
 
     /// Sets the contract specifications for this underlying.
